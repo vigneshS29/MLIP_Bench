@@ -5,7 +5,7 @@
 #===========================================================
 
 # System Inputs:
-variable    system_name      index    system.data
+variable    system_name      index    data.lmp
 variable    settings_name    index    settings.lmp
 variable    prefix           index    run
 variable    replicate        index    2
@@ -32,8 +32,8 @@ variable    temp0_equil      index    200.0
 variable    tempf_equil      index    200.0
 
 # Production Variables:
-variable    nSteps_prod      index    10000000
-variable    production_timestep index  0.5
+variable    nSteps_prod          index    10000000
+variable    production_timestep index    2.0
 
 #===========================================================
 # Initialize System
@@ -42,11 +42,13 @@ variable    production_timestep index  0.5
 units real
 atom_style full
 boundary p p p
+
 bond_style harmonic
 angle_style harmonic
 dihedral_style opls
 improper_style cvff
-kspace_style   pppm 1.0e-4
+
+kspace_style pppm 1.0e-4
 pair_style lj/cut/coul/long 10.0
 pair_modify mix arithmetic
 special_bonds lj/coul 0.0 0.0 0.5
@@ -55,16 +57,15 @@ special_bonds lj/coul 0.0 0.0 0.5
 # Setup System
 #===========================================================
 
-read_data system.data
-include settings.lmp
+read_data ${system_name}
+include ${settings_name}
 
 change_box all x scale 1.0 y scale 1.0 z scale 1.0 remap
 
 group all_atoms type > 0
 
-neighbor        2.0 bin
-# *** UPDATED: Increased neighbor memory limits ***
-neigh_modify    every 1 delay 0 check yes one 5000 page 500000
+neighbor 2.0 bin
+neigh_modify every 1 delay 0 check yes one 5000 page 500000
 
 thermo_style custom step temp press ke pe etotal density
 thermo 5000
@@ -77,35 +78,47 @@ timestep 0.25
 
 # --- High Dielectric / Soft Coulombic Relaxation ---
 kspace_style none
-pair_style    lj/cut/coul/cut 10.0
+pair_style lj/cut/coul/cut 10.0
 dielectric 100.0
-include      settings.lmp          
+
+include settings.lmp
 
 # Gentle contact relaxation
 fix nve_relax all nve/limit 0.05
+
 print "======================"
 print "Starting relaxation with damped Coulombics..."
 print "======================"
+
 run 50000
+
 unfix nve_relax
 
 # -------------------- Minimization -----------------------
+
 print "======================"
 print "Starting minimization..."
 print "======================"
+
 min_style cg
 minimize 0.001 1e-05 10000 50000
 
 # --- Restore standard Coulombics ---
+
 dielectric 1.0
 kspace_style pppm 1.0e-4
-pair_style   lj/cut/coul/long 10.0
-include  settings.lmp
+pair_style lj/cut/coul/long 10.0
+
+include settings.lmp
+
 timer full
 
 #===========================================================
 # Thawing Phase (NVT Ramp to Relieve Pressure)
 #===========================================================
+
+timestep 2.0
+
 velocity all_atoms create 10.0 4928460 dist gaussian
 
 fix nvt_thaw all nvt temp 10.0 300.0 100.0
@@ -113,19 +126,21 @@ fix nvt_thaw all nvt temp 10.0 300.0 100.0
 print "======================"
 print "Starting NVT thawing..."
 print "======================"
+
 run 200000
+
 unfix nvt_thaw
 
 #===========================================================
 # Equilibration (NPT, Nose-Hoover)
 #===========================================================
 
-timestep 0.25
+timestep 2.0
 
-neighbor        2.0 bin
-# *** UPDATED: Carried over memory limits to ensure they don't reset ***
-neigh_modify    delay 0 every 1 check yes one 5000 page 500000
-comm_modify     cutoff 15.0 vel yes
+neighbor 2.0 bin
+
+neigh_modify delay 0 every 1 check yes one 5000 page 500000
+comm_modify cutoff 15.0 vel yes
 
 variable Td_eq equal 1000*0.25
 variable Pd_eq equal 40000*0.25
@@ -133,24 +148,44 @@ variable Pd_eq equal 40000*0.25
 print "======================"
 print "Starting NPT Compression (1 atm -> 200 atm)..."
 print "======================"
+
 fix npt_comp all npt temp 300.0 300.0 ${Td_eq} iso 1.0 200.0 ${Pd_eq} drag 4.0
+
 run 100000
+
 unfix npt_comp
+
 
 print "======================"
 print "Starting NPT Relaxation (200 atm -> 1 atm)..."
 print "======================"
+
 fix npt_relax all npt temp 300.0 300.0 ${Td_eq} iso 200.0 1.0 ${Pd_eq} drag 4.0
+
 run 200000
+
 unfix npt_relax
+
+fix npt_final all npt temp 300.0 300.0 ${Td_eq} iso 1.0 1.0 ${Pd_eq} drag 4.0
+
+run 200000
+
+unfix npt_final
 
 write_data equilibrated.data
 
 #===========================================================
-# Production (NVT at 300K)
+# Production (NVT at 300 K)
 #===========================================================
 
+# ----------------------------------------------------------
+# Production timestep = 2 fs
+# ----------------------------------------------------------
+
+timestep ${production_timestep}
+
 dump production all custom 10000 production.lammpstrj id mol type x y z
+
 dump_modify production format line "%d %d %d %.3f %.3f %.3f"
 dump_modify production sort id
 
@@ -158,22 +193,48 @@ thermo_style custom step temp pe ke etotal press density
 thermo_modify format float %10.3f
 thermo 1000
 
-# --------- Production Fix and Momentum Removal ---------
-variable Td_prod equal 1000*0.5
+# ----------------------------------------------------------
+# SHAKE all bonds attached to hydrogen atoms
+#
+# Hydrogen mass = ~1.008 amu
+#
+# "m 1.008" tells LAMMPS to constrain bonds connected
+# to atoms whose mass corresponds to hydrogen.
+# ----------------------------------------------------------
+
+fix shake_h all shake 1.0e-4 20 0 m 1.008
+
+# ----------------------------------------------------------
+# Production thermostat
+#
+# Original Tdamp:
+#     1000 * 0.5 fs = 500 fs
+#
+# Keep the same physical 500 fs thermostat damping time
+# even though dt is now 2 fs.
+# ----------------------------------------------------------
+
+variable Td_prod equal 500.0
+
 fix nvt_prod all nvt temp 300.0 300.0 ${Td_prod}
 
+# Remove center-of-mass momentum periodically
 fix remove_momentum all momentum 10000 linear 1 1 1
 
-# --------- Production Neighbor Update
-neighbor        3.0 bin
-# *** UPDATED: Carried over memory limits ***
-neigh_modify    delay 0 every 4 check yes one 5000 page 500000
+# ----------------------------------------------------------
+# Production Neighbor Update
+# ----------------------------------------------------------
 
-timestep 0.5
+neighbor 3.0 bin
+
+neigh_modify delay 0 every 4 check yes one 5000 page 500000
 
 print "======================"
 print "Starting NVT production..."
+print "Production timestep = ${production_timestep} fs"
+print "SHAKE enabled for hydrogen bonds"
 print "======================"
+
 run 100000
 
 #===========================================================
@@ -181,6 +242,9 @@ run 100000
 #===========================================================
 
 unfix nvt_prod
+unfix shake_h
 unfix remove_momentum
+
 undump production
+
 write_data postprod.data
