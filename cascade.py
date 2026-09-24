@@ -24,21 +24,20 @@ warnings.filterwarnings("ignore")
 # 1. CONFIGURATION
 # =================================================================
 
-SURFACE_XYZ = "surface_tall.xyz"
+SURFACE_XYZ = "surface.xyz"
 
 IMPLANT_SPECIES = "Ar"
-ENERGY_EV = 1000.0
+ENERGY_EV = 100.0
 
-CYCLES = 1
+CYCLES = 15
 
-MD_STEPS_PER_CYCLE = 20000
+MD_STEPS_PER_CYCLE = 2000
 DT_FS = 0.5
 
 TEMP_K = 300.0
 
 # Preserves your original friction value in inverse ASE time units.
-FRICTION = 0.5
-
+FRICTION = 0.02
 
 # -----------------------------------------------------------------
 # FIXED / THERMOSTATTED REGIONS
@@ -46,7 +45,7 @@ FRICTION = 0.5
 
 FIXED_CUTOFF_Z = 3.0
 
-THERMO_CUTOFF_Z = 100.0
+THERMO_CUTOFF_Z = 75.0
 
 
 # -----------------------------------------------------------------
@@ -66,7 +65,7 @@ SPUTTER_INTERVAL_PS = 0.5
 #
 # Set to 0.0 if you literally want the initial surface top
 # to be the removal boundary.
-SPUTTER_BUFFER_Z = 0.0
+SPUTTER_BUFFER_Z = 3.0
 
 SPUTTER_LOG = "sputtered_species.log"
 
@@ -822,7 +821,7 @@ def run_cyclic_implantation(
     )
 
     orbff = (
-        pretrained.orb_v3_conservative_inf_omat(
+        pretrained.orb_v3_direct_inf_omat(
             device=device,
             precision="float32-high",
         )
@@ -997,7 +996,7 @@ def run_cyclic_implantation(
         # 0.5 Å above the highest existing atom.
         ion_cart[2] = (
             current_max_z
-            + 0.5
+            + 1.0
         )
 
 
